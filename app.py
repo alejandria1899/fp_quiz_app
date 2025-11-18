@@ -279,11 +279,16 @@ def show_results_step():
 def main():
     st.title("Cuestionarios FP con Streamlit")
 
-    # Solo aseguramos que existan las tablas.
-    # Los datos vienen del CSV usando: python -m db.import_from_csv
-    create_tables()
-
+    # 🔹 Inicializar base de datos (crea tablas y, si hace falta, importa el CSV)
     init_db()
+
+    # 🔹 Inicializar estado de sesión la primera vez
+    if "step" not in st.session_state:
+        st.session_state.step = "select_subject"
+        st.session_state.selected_subject_id = None
+        st.session_state.selected_topic_id = None
+        st.session_state.user_answers = {}
+        st.session_state.corrections = None
 
     step = st.session_state.step
 
