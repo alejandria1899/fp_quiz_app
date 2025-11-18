@@ -14,7 +14,8 @@ def import_from_csv():
     Borra todos los datos de la base de datos y los vuelve a cargar
     desde quizzes.csv.
 
-    Se asume el siguiente formato de columnas en el CSV (separador ';'):
+    Se asume el siguiente formato lógico de columnas en el CSV
+    (separadas por ';'):
 
     subject;topic_number;topic_title;question_number;question_text;
     option_a;option_b;option_c;option_d;correct_option
@@ -22,24 +23,23 @@ def import_from_csv():
     donde correct_option es A, B, C o D.
     """
 
-    # Nos aseguramos de que las tablas existen
+    # 0) Aseguramos tablas
     create_tables()
 
     conn = get_connection()
     cur = conn.cursor()
 
-    # 1) Borrar datos en orden de dependencias (options -> questions -> topics -> subjects)
+    # 1) Borrar datos existentes (en orden de dependencias)
     cur.execute("DELETE FROM option")
     cur.execute("DELETE FROM question")
     cur.execute("DELETE FROM topic")
     cur.execute("DELETE FROM subject")
     conn.commit()
 
-    # 2) Mapas para no repetir inserts de subjects y topics
+    # 2) Diccionarios para no duplicar inserts
     subject_ids = {}  # nombre_asignatura -> id
     topic_ids = {}    # (nombre_asignatura, num_tema) -> id_tema
 
-    # 3) Leer el CSV
     expected_header = [
         "subject",
         "topic_number",
@@ -53,36 +53,49 @@ def import_from_csv():
         "correct_option",
     ]
 
+    # 3) Leer CSV con DictReader y normalizar las cabeceras
     with open(CSV_PATH, "r", encoding="utf-8") as f:
-        # Leemos y limpiamos la cabecera (por si tiene BOM)
-        first_line = f.readline()
-        header = [h.replace("\ufeff", "").strip() for h in first_line.strip().split(";")]
+        reader = csv.DictReader(f, delimiter=";")
 
-        if header != expected_header:
+        if reader.fieldnames is None:
+            raise ValueError("El CSV no tiene cabecera o está vacío.")
+
+        # Normalizamos los nombres de columna
+        raw_fieldnames = reader.fieldnames
+        clean_fieldnames = [
+            name.replace("\ufeff", "").replace('"', "").strip()
+            for name in raw_fieldnames
+        ]
+
+        # Mapa de nombre original -> nombre limpio
+        name_map = {raw: clean for raw, clean in zip(raw_fieldnames, clean_fieldnames)}
+
+        # Comprobamos que al menos existen las columnas que necesitamos
+        missing = [col for col in expected_header if col not in clean_fieldnames]
+        if missing:
             raise ValueError(
-                f"Cabecera del CSV incorrecta.\n"
-                f"Esperado: {expected_header}\n"
-                f"Encontrado: {header}"
+                f"Faltan columnas en el CSV: {missing}. "
+                f"Cabeceras detectadas: {clean_fieldnames}"
             )
 
-        reader = csv.DictReader(
-            f,
-            fieldnames=expected_header,
-            delimiter=";",
-        )
+        for raw_row in reader:
+            # Normalizamos el diccionario de la fila
+            row = {
+                name_map[key]: (value.strip() if value is not None else "")
+                for key, value in raw_row.items()
+            }
 
-        for row in reader:
-            subject_name = row["subject"].strip()
+            subject_name = row["subject"]
             topic_number = int(row["topic_number"])
-            topic_title = row["topic_title"].strip()
-            # question_number lo tenemos por si lo quieres usar en el futuro
-            question_text = row["question_text"].strip()
+            topic_title = row["topic_title"]
+            question_number = int(row["question_number"])
+            question_text = row["question_text"]
 
-            option_a = row["option_a"].strip()
-            option_b = row["option_b"].strip()
-            option_c = row["option_c"].strip()
-            option_d = row["option_d"].strip()
-            correct_letter = row["correct_option"].strip().upper()
+            option_a = row["option_a"]
+            option_b = row["option_b"]
+            option_c = row["option_c"]
+            option_d = row["option_d"]
+            correct_letter = row["correct_option"].upper()
 
             # 3.1) Insertar subject si hace falta
             if subject_name not in subject_ids:
@@ -114,7 +127,7 @@ def import_from_csv():
                 INSERT INTO question (topic_id, number, text)
                 VALUES (?, ?, ?)
                 """,
-                (topic_id, int(row["question_number"]), question_text),
+                (topic_id, question_number, question_text),
             )
             question_id = cur.lastrowid
 
