@@ -39,6 +39,32 @@ def init_state():
         # lista de dicts con info por pregunta para el resumen final
         st.session_state.review = []
 
+    # 🔐 Estado de autenticación
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if "user_email" not in st.session_state:
+        st.session_state.user_email = ""
+
+
+# ---------------------- LOGIN ---------------------- #
+
+
+def login_screen():
+    st.title("🔐 Acceso a FP Quiz")
+
+    email = st.text_input("Introduce tu correo")
+
+    if st.button("Entrar"):
+        email_clean = email.strip().lower()
+        if email_clean.endswith("@alu.medac.es"):
+            st.session_state.logged_in = True
+            st.session_state.user_email = email_clean
+            st.success("Acceso concedido. ¡Bienvenido!")
+            st.rerun()
+        else:
+            st.error("❌ Solo pueden acceder alumnos de Medac")
+
 
 # ---------------------- PANTALLA 1: SELECCIONAR ASIGNATURA ---------------------- #
 
@@ -165,7 +191,7 @@ def select_topic_step():
             st.rerun()
 
 
-# ---------------------- PANTALLA 3: CUESTIONARIO (10 PREGUNTAS A LA VEZ) ---------------------- #
+# ---------------------- PANTALLA 3: CUESTIONARIO (TODAS LAS PREGUNTAS) ---------------------- #
 
 
 def quiz_step():
@@ -389,6 +415,11 @@ def main():
     )
 
     init_state()
+
+    # 🔐 Comprobar login antes de mostrar la app
+    if not st.session_state.logged_in:
+        login_screen()
+        return
 
     st.title("FP Quiz – Prevención de riesgos profesionales")
 
