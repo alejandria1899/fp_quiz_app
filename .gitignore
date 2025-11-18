@@ -4,3 +4,5 @@ __pycache__/
 mi_entorno/
 .env
 .streamlit/
+.devcontainer/
+devcontainer.json
