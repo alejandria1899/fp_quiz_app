@@ -8,6 +8,29 @@ from services.quiz_service import (
     get_topic_name,
 )
 
+# ---------------------- ACCESO POR CORREOS PERMITIDOS ---------------------- #
+
+
+def load_allowed_emails():
+    """
+    Carga los correos permitidos desde st.secrets["allowed_emails"].
+
+    En Streamlit Cloud debes configurar en los secrets algo como:
+    allowed_emails = "correo1@alu.medac.es,correo2@alu.medac.es"
+
+    En local, si no hay nada configurado en secrets, se usará
+    un correo de prueba por defecto.
+    """
+    raw = st.secrets.get("allowed_emails", "")
+    if not raw:
+        # Fallback para desarrollo local (cámbialo por tu correo real)
+        return {"tuemail@alu.medac.es"}
+
+    return {email.strip().lower() for email in raw.split(",") if email.strip()}
+
+
+ALLOWED_EMAILS = load_allowed_emails()
+
 
 # ---------------------- ESTADO INICIAL ---------------------- #
 
@@ -51,19 +74,20 @@ def init_state():
 
 
 def login_screen():
-    st.title("🔐 Acceso a FP Quiz")
+    st.title("🔐 Acceso restringido a FP Quiz")
 
-    email = st.text_input("Introduce tu correo")
+    email = st.text_input("Introduce tu correo autorizado")
 
     if st.button("Entrar"):
         email_clean = email.strip().lower()
-        if email_clean.endswith("@alu.medac.es"):
+
+        if email_clean in ALLOWED_EMAILS:
             st.session_state.logged_in = True
             st.session_state.user_email = email_clean
-            st.success("Acceso concedido. ¡Bienvenido!")
+            st.success("Acceso permitido. ¡Bienvenido!")
             st.rerun()
         else:
-            st.error("❌ Solo pueden acceder alumnos de Medac")
+            st.error("❌ Este correo no está autorizado para usar la aplicación.")
 
 
 # ---------------------- PANTALLA 1: SELECCIONAR ASIGNATURA ---------------------- #
