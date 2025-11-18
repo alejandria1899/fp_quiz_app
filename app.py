@@ -1,328 +1,396 @@
 import streamlit as st
 
-from db.create_db import create_tables
 from services.quiz_service import (
     get_subjects,
     get_topics_by_subject,
-    get_questions_with_options_by_topic,
+    get_questions_by_topic,
+    get_subject_name,
+    get_topic_name,
 )
 
 
-# ------------------------------
-# Inicialización de base de datos
-# ------------------------------
-
-def init_db():
-    """
-    En producción (Streamlit Cloud) NO importamos desde el CSV.
-    Solo nos aseguramos de que las tablas existan en quizzes.db.
-
-    Los datos de preguntas ya están dentro de quizzes.db,
-    que lo has generado en local ejecutando:
-        python -m db.import_from_csv
-    """
-    create_tables()
+# ---------------------- ESTADO INICIAL ---------------------- #
 
 
-# ------------------------------
-# Estado de sesión
-# ------------------------------
+def init_state():
+    if "step" not in st.session_state:
+        st.session_state.step = "select_subject"
 
-def init_session_state():
-    st.session_state.step = "select_subject"
-    st.session_state.selected_subject_id = None
-    st.session_state.selected_topic_id = None
-    st.session_state.user_answers = {}
-    st.session_state.corrections = None
+    if "selected_subject_id" not in st.session_state:
+        st.session_state.selected_subject_id = None
+
+    if "selected_topic_id" not in st.session_state:
+        st.session_state.selected_topic_id = None
+
+    if "questions" not in st.session_state:
+        st.session_state.questions = []
+
+    if "user_answers" not in st.session_state:
+        # dict: question_id -> option_id
+        st.session_state.user_answers = {}
+
+    if "score" not in st.session_state:
+        st.session_state.score = 0
+
+    if "total_questions" not in st.session_state:
+        st.session_state.total_questions = 0
+
+    if "review" not in st.session_state:
+        # lista de dicts con info por pregunta para el resumen final
+        st.session_state.review = []
 
 
-# ------------------------------
-# Paso 1: elegir asignatura
-# ------------------------------
+# ---------------------- PANTALLA 1: SELECCIONAR ASIGNATURA ---------------------- #
+
 
 def select_subject_step():
-    st.header("1️⃣ Elige una asignatura")
+    st.header("📚 Selecciona la asignatura")
 
     subjects = get_subjects()
 
     if not subjects:
-        st.error("No hay asignaturas en la base de datos.")
-        st.info("Asegúrate de haber importado datos desde el CSV en local.")
+        st.warning("No hay asignaturas disponibles en la base de datos.")
         return
 
     subject_names = [s["name"] for s in subjects]
-    subject_ids = [s["id"] for s in subjects]
+    id_by_name = {s["name"]: s["id"] for s in subjects}
 
-    # Valor por defecto: el que esté ya en session_state si existe
-    if st.session_state.get("selected_subject_id") in subject_ids:
-        default_index = subject_ids.index(st.session_state["selected_subject_id"])
+    # Preselección si ya tenía algo guardado
+    if st.session_state.selected_subject_id is not None:
+        try:
+            default_index = subject_names.index(
+                next(
+                    s["name"]
+                    for s in subjects
+                    if s["id"] == st.session_state.selected_subject_id
+                )
+            )
+        except StopIteration:
+            default_index = 0
     else:
         default_index = 0
 
-    selected_name = st.selectbox(
-        "Asignatura:",
+    selected_subject_name = st.selectbox(
+        "Elige una asignatura:",
         subject_names,
         index=default_index,
     )
 
-    selected_subject_id = subject_ids[subject_names.index(selected_name)]
+    selected_subject_id = id_by_name[selected_subject_name]
 
-    if st.button("➡️ Elegir tema"):
+    if st.button("Continuar ➡️"):
+        # Guardamos asignatura y reseteamos todo lo relacionado con el quiz
         st.session_state.selected_subject_id = selected_subject_id
         st.session_state.selected_topic_id = None
+        st.session_state.questions = []
         st.session_state.user_answers = {}
-        st.session_state.corrections = None
+        st.session_state.score = 0
+        st.session_state.total_questions = 0
+        st.session_state.review = []
         st.session_state.step = "select_topic"
-        st.experimental_rerun()
+        st.rerun()
 
 
-# ------------------------------
-# Paso 2: elegir tema
-# ------------------------------
+# ---------------------- PANTALLA 2: SELECCIONAR TEMA ---------------------- #
+
 
 def select_topic_step():
-    st.header("2️⃣ Elige un tema")
+    st.header("📝 Selecciona el tema")
 
-    subject_id = st.session_state.get("selected_subject_id")
+    subject_id = st.session_state.selected_subject_id
     if subject_id is None:
-        st.warning("Primero elige una asignatura.")
+        st.error("No se ha seleccionado ninguna asignatura.")
         st.session_state.step = "select_subject"
-        st.experimental_rerun()
+        st.rerun()
         return
+
+    subject_name = get_subject_name(subject_id) or "Asignatura"
+    st.subheader(f"Asignatura: **{subject_name}**")
 
     topics = get_topics_by_subject(subject_id)
 
     if not topics:
-        st.error("Esta asignatura aún no tiene temas.")
+        st.warning("No hay temas para esta asignatura.")
         if st.button("⬅️ Volver a asignaturas"):
             st.session_state.step = "select_subject"
-            st.experimental_rerun()
+            st.rerun()
         return
 
-    topic_labels = [f"Tema {t['number']}: {t['title']}" for t in topics]
-    topic_ids = [t["id"] for t in topics]
+    topic_labels = [f"Tema {t['number']}: {t['name']}" for t in topics]
+    id_by_label = {topic_labels[i]: topics[i]["id"] for i in range(len(topics))}
 
-    if st.session_state.get("selected_topic_id") in topic_ids:
-        default_index = topic_ids.index(st.session_state["selected_topic_id"])
+    # Preselección si ya había tema
+    if st.session_state.selected_topic_id is not None:
+        try:
+            default_index = topic_labels.index(
+                next(
+                    f"Tema {t['number']}: {t['name']}"
+                    for t in topics
+                    if t["id"] == st.session_state.selected_topic_id
+                )
+            )
+        except StopIteration:
+            default_index = 0
     else:
         default_index = 0
 
     selected_label = st.selectbox(
-        "Tema:",
+        "Elige un tema:",
         topic_labels,
         index=default_index,
     )
-
-    selected_topic_id = topic_ids[topic_labels.index(selected_label)]
+    selected_topic_id = id_by_label[selected_label]
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅️ Cambiar asignatura"):
             st.session_state.step = "select_subject"
-            st.session_state.selected_subject_id = None
-            st.session_state.selected_topic_id = None
-            st.session_state.user_answers = {}
-            st.session_state.corrections = None
-            st.experimental_rerun()
+            st.rerun()
 
     with col2:
-        if st.button("➡️ Empezar cuestionario"):
+        if st.button("Empezar cuestionario ✅"):
+            questions = get_questions_by_topic(selected_topic_id)
+            if not questions:
+                st.error("No hay preguntas para este tema.")
+                return
+
+            # Guardar estado del cuestionario
             st.session_state.selected_topic_id = selected_topic_id
+            st.session_state.questions = questions
             st.session_state.user_answers = {}
-            st.session_state.corrections = None
-            st.session_state.step = "do_quiz"
-            st.experimental_rerun()
+            st.session_state.score = 0
+            st.session_state.total_questions = len(questions)
+            st.session_state.review = []
+            st.session_state.step = "quiz"
+            st.rerun()
 
 
-# ------------------------------
-# Paso 3: realizar cuestionario
-# ------------------------------
+# ---------------------- PANTALLA 3: CUESTIONARIO (10 PREGUNTAS A LA VEZ) ---------------------- #
 
-def do_quiz_step():
-    st.header("3️⃣ Cuestionario")
 
-    topic_id = st.session_state.get("selected_topic_id")
-    if topic_id is None:
-        st.warning("Primero elige un tema.")
-        st.session_state.step = "select_topic"
-        st.experimental_rerun()
-        return
+def quiz_step():
+    st.header("📖 Cuestionario")
 
-    questions = get_questions_with_options_by_topic(topic_id)
-
+    questions = st.session_state.questions
     if not questions:
-        st.error("Este tema no tiene preguntas aún.")
+        st.error("No hay preguntas cargadas para este tema.")
         if st.button("⬅️ Volver a temas"):
             st.session_state.step = "select_topic"
-            st.experimental_rerun()
+            st.rerun()
         return
 
-    st.write(
-        "Responde a todas las preguntas y, cuando termines, pulsa **Corregir**."
-    )
+    subject_id = st.session_state.selected_subject_id
+    topic_id = st.session_state.selected_topic_id
+    subject_name = get_subject_name(subject_id) or "Asignatura"
+    topic_name = get_topic_name(topic_id) or "Tema"
 
-    user_answers = st.session_state.get("user_answers", {})
+    st.caption(f"**{subject_name}** · {topic_name}")
+    st.write(f"Total de preguntas: **{len(questions)}**")
 
-    # Mostramos las 10 preguntas seguidas
-    for q in questions:
-        qid = q["id"]
-        st.markdown(f"**Pregunta {q['number']}**")
-        st.write(q["text"])
+    # Mostramos TODAS las preguntas a la vez
+    for idx, question in enumerate(questions, start=1):
+        st.markdown(f"### {idx}. {question['text']}")
 
-        options = q["options"]  # lista de dicts con id, text, is_correct
-        option_labels = [opt["text"] for opt in options]
+        options = question["options"]
         option_ids = [opt["id"] for opt in options]
 
-        # Usamos claves únicas por pregunta en session_state
-        state_key = f"q_{qid}_answer"
+        # Mapa id -> "A. Texto"
+        def format_option(opt_id):
+            opt = next(o for o in options if o["id"] == opt_id)
+            label = opt.get("label")
+            if label:
+                return f"{label}. {opt['text']}"
+            return opt["text"]
 
-        # Recuperar respuesta previa si existe
-        prev_answer_id = user_answers.get(qid)
-        if prev_answer_id in option_ids:
-            prev_index = option_ids.index(prev_answer_id)
-        else:
-            prev_index = None  # Nada seleccionado
+        saved = st.session_state.user_answers.get(question["id"], None)
 
-        # Radio sin opción marcada por defecto
-        selected_label = st.radio(
-            "Elige una respuesta:",
-            option_labels,
-            index=prev_index if prev_index is not None else 0,
-            key=state_key,
+        # Radio SIN opción preseleccionada al inicio (index=None)
+        selected_option_id = st.radio(
+            "Selecciona una opción:",
+            option_ids,
+            index=option_ids.index(saved) if saved in option_ids else None,
+            format_func=format_option,
+            key=f"q_{question['id']}",
         )
 
-        # Importante: si queremos "sin marcar" de verdad,
-        # ponemos el valor solo cuando el usuario interactúe.
-        # Pero Streamlit obliga a tener un valor; así que
-        # lo que hacemos es guardar lo que haya en session_state
-        # al final del render.
-
-        selected_idx = option_labels.index(selected_label)
-        selected_option_id = option_ids[selected_idx]
-        user_answers[qid] = selected_option_id
+        # Guardamos en el dict de respuestas (puede ser None si no ha marcado nada aún)
+        st.session_state.user_answers[question["id"]] = selected_option_id
 
         st.markdown("---")
 
-    # Actualizamos en session_state
-    st.session_state.user_answers = user_answers
-
-    if st.button("✅ Corregir"):
-        corrections = []
-        score = 0
-
-        for q in questions:
-            qid = q["id"]
-            options = q["options"]
-            option_ids = [opt["id"] for opt in options]
-
-            correct_option = next(
-                opt for opt in options if opt["is_correct"] == 1
-            )
-
-            user_option_id = user_answers.get(qid)
-            is_correct = user_option_id == correct_option["id"]
-
-            if is_correct:
-                score += 1
-
-            user_letter = None
-            if user_option_id in option_ids:
-                idx = option_ids.index(user_option_id)
-                user_letter = ["A", "B", "C", "D"][idx]
-
-            correct_idx = option_ids.index(correct_option["id"])
-            correct_letter = ["A", "B", "C", "D"][correct_idx]
-
-            corrections.append(
-                {
-                    "question_number": q["number"],
-                    "question_text": q["text"],
-                    "is_correct": is_correct,
-                    "correct_text": correct_option["text"],
-                    "correct_letter": correct_letter,
-                    "user_letter": user_letter,
-                }
-            )
-
-        st.session_state.corrections = {
-            "score": score,
-            "total": len(questions),
-            "results": corrections,
-        }
-        st.session_state.step = "show_results"
-        st.experimental_rerun()
-
-
-# ------------------------------
-# Paso 4: mostrar resultados
-# ------------------------------
-
-def show_results_step():
-    st.header("4️⃣ Resultados")
-
-    corrections = st.session_state.get("corrections")
-    if not corrections:
-        st.warning("Todavía no has corregido un cuestionario.")
-        st.session_state.step = "select_subject"
-        st.experimental_rerun()
-        return
-
-    score = corrections["score"]
-    total = corrections["total"]
-
-    st.markdown(f"### Has acertado **{score} / {total}**")
-
-    for idx, r in enumerate(corrections["results"], start=1):
-        if r["is_correct"]:
-            st.success(f"✅ Pregunta {idx}: correcta")
-        else:
-            st.error(f"❌ Pregunta {idx}: incorrecta")
-
-        st.write(r["question_text"])
-        st.write(f"   - Respuesta correcta: **{r['correct_letter']}) {r['correct_text']}**")
-        if r["user_letter"] is None:
-            st.write("   - Tu respuesta: *(sin contestar)*")
-        else:
-            st.write(f"   - Tu respuesta: **{r['user_letter']})**")
-        st.markdown("---")
-
-    col1, col2, col3 = st.columns(3)
+    # Botones debajo de todo
+    col1, col2 = st.columns([1, 1])
 
     with col1:
-        if st.button("🔁 Repetir este cuestionario"):
-            # Limpia solo respuestas y correcciones, mantiene asignatura/tema
+        if st.button("⬅️ Volver a elegir tema"):
+            # Volver a pantalla de temas y limpiar solo cosas del cuestionario
+            st.session_state.step = "select_topic"
+            st.session_state.questions = []
             st.session_state.user_answers = {}
-            st.session_state.corrections = None
-            st.session_state.step = "do_quiz"
-            st.experimental_rerun()
+            st.session_state.score = 0
+            st.session_state.total_questions = 0
+            st.session_state.review = []
+            st.rerun()
 
     with col2:
-        if st.button("📚 Elegir otro tema"):
-            st.session_state.selected_topic_id = None
-            st.session_state.user_answers = {}
-            st.session_state.corrections = None
+        if st.button("✅ Corregir cuestionario"):
+            finish_quiz()  # calcula nota y review
+            st.session_state.step = "results"
+            st.rerun()
+
+
+# ---------------------- CORRECCIÓN Y RESULTADOS ---------------------- #
+
+
+def finish_quiz():
+    questions = st.session_state.questions
+    answers = st.session_state.user_answers
+
+    correct_count = 0
+    review = []
+
+    for q in questions:
+        q_id = q["id"]
+        options = q["options"]
+        selected_option_id = answers.get(q_id)
+
+        # Buscar opción correcta
+        correct_option = next((o for o in options if o["is_correct"]), None)
+
+        selected_option = None
+        if selected_option_id is not None:
+            selected_option = next(
+                (o for o in options if o["id"] == selected_option_id),
+                None,
+            )
+
+        is_correct = (
+            selected_option is not None
+            and correct_option is not None
+            and selected_option["id"] == correct_option["id"]
+        )
+
+        if is_correct:
+            correct_count += 1
+
+        review.append(
+            {
+                "question_text": q["text"],
+                "is_correct": is_correct,
+                "correct_label": correct_option.get("label") if correct_option else None,
+                "correct_text": correct_option.get("text") if correct_option else None,
+                "selected_label": selected_option.get("label")
+                if selected_option
+                else None,
+                "selected_text": selected_option.get("text")
+                if selected_option
+                else None,
+            }
+        )
+
+    total = len(questions)
+    st.session_state.score = correct_count
+    st.session_state.total_questions = total
+    st.session_state.review = review
+
+
+def results_step():
+    st.header("📊 Resultado del cuestionario")
+
+    score = st.session_state.score
+    total = st.session_state.total_questions
+    review = st.session_state.review
+
+    if total == 0 or not review:
+        st.warning("No hay resultados para mostrar.")
+        if st.button("Volver a temas"):
             st.session_state.step = "select_topic"
-            st.experimental_rerun()
+            st.rerun()
+        return
 
-    with col3:
-        if st.button("🏫 Elegir otra asignatura"):
-            init_session_state()
-            st.experimental_rerun()
+    pct = (score / total) * 100
+    st.write(f"Has acertado **{score} de {total}** preguntas. (**{pct:.1f}%**)")
+
+    if pct == 100:
+        st.success("¡Perfecto! 🎉")
+    elif pct >= 70:
+        st.success("Muy bien, buen nivel 💪")
+    elif pct >= 50:
+        st.info("No está mal, pero hay margen de mejora 📚")
+    else:
+        st.warning("Toca repasar un poco más. Puedes volver a intentarlo 😉")
+
+    # Separar acertadas y falladas
+    correct_questions = [r for r in review if r["is_correct"]]
+    wrong_questions = [r for r in review if not r["is_correct"]]
+
+    st.markdown("---")
+    st.subheader("✅ Preguntas acertadas")
+    if not correct_questions:
+        st.write("No has acertado ninguna en este intento.")
+    else:
+        for idx, r in enumerate(correct_questions, start=1):
+            st.markdown(f"**{idx}. {r['question_text']}**")
+            st.write(
+                f"✅ Respuesta correcta: **{r['correct_label']}. {r['correct_text']}**"
+            )
+
+    st.markdown("---")
+    st.subheader("❌ Preguntas falladas")
+    if not wrong_questions:
+        st.write("No has fallado ninguna, ¡enhorabuena! 🎉")
+    else:
+        for idx, r in enumerate(wrong_questions, start=1):
+            st.markdown(f"**{idx}. {r['question_text']}**")
+
+            if r["selected_label"] is None:
+                st.write("❌ No respondiste esta pregunta.")
+            else:
+                st.write(
+                    f"❌ Tu respuesta: **{r['selected_label']}. {r['selected_text']}**"
+                )
+
+            st.write(
+                f"✅ Respuesta correcta: **{r['correct_label']}. {r['correct_text']}**"
+            )
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🔁 Repetir este tema"):
+            # Volver a hacer el mismo tema
+            st.session_state.step = "quiz"
+            st.session_state.user_answers = {}
+            st.session_state.score = 0
+            st.session_state.review = []
+            st.rerun()
+
+    with col2:
+        if st.button("🔙 Volver a elegir tema"):
+            # Ir a selección de tema
+            st.session_state.step = "select_topic"
+            st.session_state.questions = []
+            st.session_state.user_answers = {}
+            st.session_state.score = 0
+            st.session_state.total_questions = 0
+            st.session_state.review = []
+            st.rerun()
 
 
-# ------------------------------
-# main
-# ------------------------------
+# ---------------------- MAIN ---------------------- #
+
 
 def main():
-    st.title("Cuestionarios FP con Streamlit")
+    st.set_page_config(
+        page_title="Prevención de riesgos profesionales",
+        page_icon="✅",
+        layout="centered",
+    )
 
-    # 🔹 Inicializar DB (solo asegura tablas, NO importa CSV aquí)
-    init_db()
+    init_state()
 
-    # 🔹 Inicializar estado de sesión
-    if "step" not in st.session_state:
-        init_session_state()
+    st.title("FP Quiz – Prevención de riesgos profesionales")
 
     step = st.session_state.step
 
@@ -330,14 +398,14 @@ def main():
         select_subject_step()
     elif step == "select_topic":
         select_topic_step()
-    elif step == "do_quiz":
-        do_quiz_step()
-    elif step == "show_results":
-        show_results_step()
+    elif step == "quiz":
+        quiz_step()
+    elif step == "results":
+        results_step()
     else:
-        st.error("Estado desconocido. Reiniciando.")
-        init_session_state()
-        select_subject_step()
+        # Por si el estado se corrompe
+        st.session_state.step = "select_subject"
+        st.rerun()
 
 
 if __name__ == "__main__":
