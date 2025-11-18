@@ -1,17 +1,11 @@
 import sqlite3
+import random
 from db.create_db import get_connection
 
 
 # ---------- ASIGNATURAS ---------- #
 
 def get_subjects():
-    """
-    Devuelve todas las asignaturas:
-    [
-      {"id": 1, "name": "Riesgos químicos y biológicos ambientales"},
-      ...
-    ]
-    """
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -30,9 +24,6 @@ def get_subjects():
 
 
 def get_subject_name(subject_id: int):
-    """
-    Devuelve el nombre de la asignatura o None si no existe.
-    """
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -50,16 +41,6 @@ def get_subject_name(subject_id: int):
 # ---------- TEMAS ---------- #
 
 def get_topics_by_subject(subject_id: int):
-    """
-    Devuelve los temas de una asignatura:
-    [
-      {"id": 1, "number": 1, "name": "Tema 1. ..." },
-      ...
-    ]
-
-    En la tabla topic el campo de texto se llama 'title',
-    lo exponemos como 'name' para que lo use app.py.
-    """
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -80,16 +61,13 @@ def get_topics_by_subject(subject_id: int):
         {
             "id": r["id"],
             "number": r["number"],
-            "name": r["title"],  # app.py espera 'name'
+            "name": r["title"],
         }
         for r in rows
     ]
 
 
 def get_topic_name(topic_id: int):
-    """
-    Devuelve el título del tema o None.
-    """
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -108,22 +86,9 @@ def get_topic_name(topic_id: int):
 
 def get_questions_by_topic(topic_id: int):
     """
-    Devuelve una lista de preguntas de un tema con sus opciones.
-
-    Formato:
-    [
-      {
-        "id": ...,
-        "text": ...,
-        "number": ...,
-        "options": [
-          {"id": ..., "text": ..., "label": "A", "is_correct": True/False},
-          ...
-        ]
-      },
-      ...
-    ]
+    Devuelve una lista de preguntas de un tema con sus opciones barajadas.
     """
+
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -145,22 +110,29 @@ def get_questions_by_topic(topic_id: int):
     for q_row in question_rows:
         q_id = q_row["id"]
 
-        # Opciones de la pregunta
+        # =====================================================
+        # 🔥 CAMBIO: ahora NO ordenamos por ID en la consulta
+        # =====================================================
         cur.execute(
             """
             SELECT id, text, is_correct
             FROM option
             WHERE question_id = ?
-            ORDER BY id
             """,
             (q_id,),
         )
         option_rows = cur.fetchall()
 
+        # =====================================================
+        # 🔥 CAMBIO: barajar aleatoriamente las opciones
+        # =====================================================
+        option_rows = list(option_rows)   # convertir Row a lista normal
+        random.shuffle(option_rows)
+
+        # Volver a asignar etiquetas A, B, C, D según el nuevo orden
         options = []
-        # Generar etiquetas A, B, C, D según el orden
         for idx, o in enumerate(option_rows):
-            label = chr(ord("A") + idx)  # 0->A, 1->B, 2->C, 3->D
+            label = chr(ord("A") + idx)
             options.append(
                 {
                     "id": o["id"],
@@ -186,9 +158,6 @@ def get_questions_by_topic(topic_id: int):
 # ---------- RESULTADOS / HISTORIAL ---------- #
 
 def _ensure_quiz_result_table(cur):
-    """
-    Crea la tabla quiz_result si no existe todavía.
-    """
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_result (
@@ -204,9 +173,6 @@ def _ensure_quiz_result_table(cur):
 
 
 def save_quiz_result(subject_id: int, topic_id: int, score: int, total_questions: int):
-    """
-    Guarda un resultado de cuestionario en la tabla quiz_result.
-    """
     conn = get_connection()
     cur = conn.cursor()
 
@@ -225,19 +191,6 @@ def save_quiz_result(subject_id: int, topic_id: int, score: int, total_questions
 
 
 def get_quiz_history(subject_id: int):
-    """
-    Devuelve el historial de resultados para una asignatura:
-
-    [
-      {
-        "topic_name": "...",
-        "score": 8,
-        "total_questions": 10,
-        "created_at": "2025-03-01 12:34:56",
-      },
-      ...
-    ]
-    """
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

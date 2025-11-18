@@ -8,6 +8,7 @@ from services.quiz_service import (
     get_topic_name,
 )
 
+
 # ---------------------- ACCESO POR CORREOS PERMITIDOS ---------------------- #
 
 
@@ -19,11 +20,16 @@ def load_allowed_emails():
     allowed_emails = "correo1@alu.medac.es,correo2@alu.medac.es"
 
     En local, si no hay nada configurado en secrets, se usará
-    un correo de prueba por defecto.
+    un correo de prueba por defecto (cámbialo por el tuyo).
     """
-    raw = st.secrets.get("allowed_emails", "")
+    try:
+        raw = st.secrets.get("allowed_emails", "")
+    except Exception:
+        # Si no hay secrets (por ejemplo, primera vez en local),
+        # usa tu correo para pruebas locales.
+        return {"tuemail@alu.medac.es"}
+
     if not raw:
-        # Fallback para desarrollo local (cámbialo por tu correo real)
         return {"tuemail@alu.medac.es"}
 
     return {email.strip().lower() for email in raw.split(",") if email.strip()}
@@ -263,7 +269,7 @@ def quiz_step():
             key=f"q_{question['id']}",
         )
 
-        # Guardamos en el dict de respuestas (puede ser None si no ha marcado nada aún)
+        # Guardamos en el dict de respuestas
         st.session_state.user_answers[question["id"]] = selected_option_id
 
         st.markdown("---")
@@ -409,12 +415,18 @@ def results_step():
 
     with col1:
         if st.button("🔁 Repetir este tema"):
-            # Volver a hacer el mismo tema
-            st.session_state.step = "quiz"
-            st.session_state.user_answers = {}
-            st.session_state.score = 0
-            st.session_state.review = []
-            st.rerun()
+            # Volver a hacer el mismo tema, recargando preguntas para re-barajar
+            topic_id = st.session_state.selected_topic_id
+
+            if topic_id is not None:
+                questions = get_questions_by_topic(topic_id)
+                st.session_state.questions = questions
+                st.session_state.user_answers = {}
+                st.session_state.score = 0
+                st.session_state.total_questions = len(questions)
+                st.session_state.review = []
+                st.session_state.step = "quiz"
+                st.rerun()
 
     with col2:
         if st.button("🔙 Volver a elegir tema"):
