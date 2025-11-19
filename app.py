@@ -9,7 +9,6 @@ from services.quiz_service import (
     get_topic_name,
 )
 
-
 # ---------------------- ACCESO POR CORREOS PERMITIDOS ---------------------- #
 
 
@@ -37,7 +36,6 @@ def load_allowed_emails():
 
 
 ALLOWED_EMAILS = load_allowed_emails()
-
 
 # ---------------------- ESTADO INICIAL ---------------------- #
 
@@ -97,17 +95,15 @@ def login_screen():
             st.error("❌ Este correo no está autorizado para usar la aplicación.")
 
 
-# ---------------------- UTILIDAD: CARGAR PREGUNTAS DE UN TEMA ---------------------- #
+# ---------------------- HELPERS DE TEMAS / QUIZ ---------------------- #
 
 
-def load_questions_for_topic(topic_id: int) -> bool:
+def start_quiz_for_topic(topic_id: int):
     """
-    Carga las preguntas de un tema, baraja las opciones de cada pregunta
-    y deja todo listo en session_state para empezar el cuestionario.
+    Carga las preguntas de un tema, baraja las opciones y prepara el estado
+    de sesión para empezar el cuestionario.
     """
     questions = get_questions_by_topic(topic_id)
-    if not questions:
-        return False
 
     # Barajar opciones de cada pregunta
     for q in questions:
@@ -119,8 +115,25 @@ def load_questions_for_topic(topic_id: int) -> bool:
     st.session_state.score = 0
     st.session_state.total_questions = len(questions)
     st.session_state.review = []
+    st.session_state.step = "quiz"
 
-    return True
+
+def build_topic_label(subject_id: int, topic_id: int) -> str:
+    """
+    Devuelve un texto tipo: 'Tema 3: Título del tema'
+    usando la info de la DB.
+    """
+    topic_name = get_topic_name(topic_id) or "Tema"
+    label = topic_name
+
+    if subject_id is not None and topic_id is not None:
+        topics = get_topics_by_subject(subject_id)
+        for t in topics:
+            if t["id"] == topic_id:
+                label = f"Tema {t['number']}: {topic_name}"
+                break
+
+    return label
 
 
 # ---------------------- PANTALLA 1: SELECCIONAR ASIGNATURA ---------------------- #
@@ -232,12 +245,7 @@ def select_topic_step():
 
     with col2:
         if st.button("Empezar cuestionario ✅"):
-            ok = load_questions_for_topic(selected_topic_id)
-            if not ok:
-                st.error("No hay preguntas para este tema.")
-                return
-
-            st.session_state.step = "quiz"
+            start_quiz_for_topic(selected_topic_id)
             st.rerun()
 
 
@@ -258,9 +266,9 @@ def quiz_step():
     subject_id = st.session_state.selected_subject_id
     topic_id = st.session_state.selected_topic_id
     subject_name = get_subject_name(subject_id) or "Asignatura"
-    topic_name = get_topic_name(topic_id) or "Tema"
+    topic_label = build_topic_label(subject_id, topic_id)
 
-    st.caption(f"**{subject_name}** · {topic_name}")
+    st.caption(f"**{subject_name}** · {topic_label}")
     st.write(f"Total de preguntas: **{len(questions)}**")
 
     # Mostramos TODAS las preguntas a la vez
@@ -379,9 +387,14 @@ def results_step():
     subject_id = st.session_state.selected_subject_id
     topic_id = st.session_state.selected_topic_id
 
+    # Cabecera con asignatura y "Tema X: ..."
+    subject_name = get_subject_name(subject_id) or "Asignatura"
+    topic_label = build_topic_label(subject_id, topic_id)
+    st.caption(f"**{subject_name}** · {topic_label}")
+
     if total == 0 or not review:
         st.warning("No hay resultados para mostrar.")
-        if st.button("Volver a temas"):
+        if st.button("Volver a temas", key="btn_results_back_if_empty"):
             st.session_state.step = "select_topic"
             st.rerun()
         return
@@ -434,55 +447,47 @@ def results_step():
 
     st.markdown("---")
 
-    # ------------ Navegación entre temas ------------ #
-    subject_topics = []
-    current_index = None
-    if subject_id is not None and topic_id is not None:
-        subject_topics = get_topics_by_subject(subject_id)
-        for i, t in enumerate(subject_topics):
-            if t["id"] == topic_id:
-                current_index = i
-                break
+    # ---------- PRIMERO: BOTONES TEMA ANTERIOR / SIGUIENTE (JUNTOS) ---------- #
+    topics = get_topics_by_subject(subject_id) if subject_id is not None else []
+    topic_ids_ordered = [t["id"] for t in topics]
 
-    has_prev = current_index is not None and current_index > 0
-    has_next = (
-        current_index is not None
-        and subject_topics
-        and current_index < len(subject_topics) - 1
-    )
+    prev_topic_id = None
+    next_topic_id = None
 
-    # Fila 1: Tema anterior / Tema siguiente
-    col_prev, col_next = st.columns(2)
+    if topic_id in topic_ids_ordered:
+        idx = topic_ids_ordered.index(topic_id)
+        if idx > 0:
+            prev_topic_id = topic_ids_ordered[idx - 1]
+        if idx < len(topic_ids_ordered) - 1:
+            next_topic_id = topic_ids_ordered[idx + 1]
 
-    with col_prev:
-        if has_prev and st.button("⬅️ Tema anterior"):
-            prev_topic_id = subject_topics[current_index - 1]["id"]
-            ok = load_questions_for_topic(prev_topic_id)
-            if ok:
-                st.session_state.step = "quiz"
+    nav_prev_col, nav_next_col = st.columns(2)
+
+    with nav_prev_col:
+        if prev_topic_id is not None:
+            if st.button("⬅️ Tema anterior", key="btn_prev_topic"):
+                start_quiz_for_topic(prev_topic_id)
                 st.rerun()
 
-    with col_next:
-        if has_next and st.button("➡️ Tema siguiente"):
-            next_topic_id = subject_topics[current_index + 1]["id"]
-            ok = load_questions_for_topic(next_topic_id)
-            if ok:
-                st.session_state.step = "quiz"
+    with nav_next_col:
+        if next_topic_id is not None:
+            if st.button("Siguiente tema ➡️", key="btn_next_topic"):
+                start_quiz_for_topic(next_topic_id)
                 st.rerun()
 
-    # Fila 2: Repetir / Volver a elegir tema
-    col_repeat, col_back = st.columns(2)
+    st.markdown("")
 
-    with col_repeat:
-        if st.button("🔁 Repetir este tema"):
+    # ---------- DESPUÉS: BOTONES PRINCIPALES (REPETIR / VOLVER A ELEGIR TEMA) ---------- #
+    top_col1, top_col2 = st.columns(2)
+
+    with top_col1:
+        if st.button("🔁 Repetir este tema", key="btn_repeat_topic"):
             if topic_id is not None:
-                ok = load_questions_for_topic(topic_id)
-                if ok:
-                    st.session_state.step = "quiz"
-                    st.rerun()
+                start_quiz_for_topic(topic_id)
+                st.rerun()
 
-    with col_back:
-        if st.button("🔙 Volver a elegir tema"):
+    with top_col2:
+        if st.button("🔙 Volver a elegir tema", key="btn_back_to_topics"):
             st.session_state.step = "select_topic"
             st.session_state.questions = []
             st.session_state.user_answers = {}
